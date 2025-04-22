@@ -41,7 +41,7 @@ class Read(bonito.reader.Read):
         self.num_samples = read.sample_count
 
         self.context_tags = dict(self.run_info.context_tags)
-        self.sample_rate = int(self.context_tags['sample_frequency'])
+        self.sample_rate = int(self.context_tags.get('sample_frequency', self.run_info.sample_rate))
 
         self.start = read.start_sample / self.sample_rate
         self.duration = self.num_samples / self.sample_rate
