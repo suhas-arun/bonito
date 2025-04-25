@@ -46,7 +46,11 @@ class Read(bonito.reader.Read):
         if type(self.flow_cell_id) in (bytes, np.bytes_):
             self.flow_cell_id = self.flow_cell_id.decode('ascii')
 
-        self.device_id = tracking_id['device_id']
+        try:
+            self.device_id = tracking_id['device_id']
+        except KeyError:
+            self.device_id = "unset"
+
         if type(self.device_id) in (bytes, np.bytes_):
             self.device_id = self.device_id.decode('ascii')
 
