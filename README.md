@@ -1,11 +1,13 @@
 # Bonito
 
 [![PyPI version](https://badge.fury.io/py/ont-bonito.svg)](https://badge.fury.io/py/ont-bonito)
-[![py38](https://img.shields.io/badge/python-3.8-brightgreen.svg)](https://img.shields.io/badge/python-3.8-brightgreen.svg)
 [![py39](https://img.shields.io/badge/python-3.9-brightgreen.svg)](https://img.shields.io/badge/python-3.9-brightgreen.svg)
 [![py310](https://img.shields.io/badge/python-3.10-brightgreen.svg)](https://img.shields.io/badge/python-3.10-brightgreen.svg)
 [![py311](https://img.shields.io/badge/python-3.11-brightgreen.svg)](https://img.shields.io/badge/python-3.11-brightgreen.svg)
+[![py312](https://img.shields.io/badge/python-3.12-brightgreen.svg)](https://img.shields.io/badge/python-3.12-brightgreen.svg)
+[![py313](https://img.shields.io/badge/python-3.13-brightgreen.svg)](https://img.shields.io/badge/python-3.13-brightgreen.svg)
 [![cu118](https://img.shields.io/badge/cuda-11.8-blue.svg)](https://img.shields.io/badge/cuda-11.8-blue.svg)
+[![cu124](https://img.shields.io/badge/cuda-12.4-blue.svg)](https://img.shields.io/badge/cuda-12.4-blue.svg)
 
 Bonito is an open source research basecaller for Oxford Nanopore reads.
 
@@ -41,37 +43,12 @@ Setting `CUDA_HOME` to the relevant library directory will help avoid CUDA versi
 
 ## Modified Bases
 
-Modified base calling is handled by [Remora](https://github.com/nanoporetech/remora).
-
-```bash
-$ bonito basecaller dna_r10.4.1_e8.2_400bps_hac@v5.0.0 /data/reads --modified-bases 5mC --reference ref.mmi > basecalls_with_mods.bam
-```
-
-See available modified base models with the ``remora model list_pretrained`` command.
+For modified-base calling with ont-supported mods please use [dorado](https://github.com/nanoporetech/dorado)
+For development of modified base calling models please see [remora](https://github.com/nanoporetech/remora).
 
 ## Training your own model
 
-To train a model using your own reads, first basecall the reads with the additional `--save-ctc` flag and use the output directory as the input directory for training.
-
-```bash
-$ bonito basecaller dna_r10.4.1_e8.2_400bps_hac@v5.0.0 --save-ctc --reference reference.mmi /data/reads > /data/training/ctc-data/basecalls.sam
-$ bonito train --directory /data/training/ctc-data /data/training/model-dir
-```
-
-In addition to training a new model from scratch you can also easily fine tune one of the pretrained models.
-
-```bash
-bonito train --epochs 1 --lr 5e-4 --pretrained dna_r10.4.1_e8.2_400bps_hac@v5.0.0 --directory /data/training/ctc-data /data/training/fine-tuned-model
-```
-
-If you are interested in method development and don't have you own set of reads then a pre-prepared set is provide.
-
-```bash
-$ bonito download --training
-$ bonito train /data/training/model-dir
-```
-
-All training calls use Automatic Mixed Precision to speed up training. To disable this, set the `--no-amp` flag to True.
+For detailed information on the training process, please see the [Training Documentation](documentation/training.md).
 
 ## Developer Quickstart
 

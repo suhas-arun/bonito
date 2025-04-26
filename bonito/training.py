@@ -6,18 +6,17 @@ import math
 import os
 import re
 from glob import glob
-from functools import partial
+from itertools import islice
 from time import perf_counter
 from collections import OrderedDict
 from datetime import datetime
 
 from bonito.schedule import linear_warmup_cosine_decay
-from bonito.util import accuracy, decode_ref, permute, concat, match_names, tqdm_environ
+from bonito.util import accuracy, decode_ref, permute, match_names, tqdm_environ, load_object
 import bonito
 
 import torch
 import numpy as np
-import torch.nn as nn
 from tqdm import tqdm
 import torch.cuda.amp as amp
 
@@ -93,7 +92,8 @@ class Trainer:
     def __init__(
         self, model, device, train_loader, valid_loader, criterion=None,
         use_amp=True, lr_scheduler_fn=None, restore_optim=False,
-        save_optim_every=10, grad_accum_split=1, quantile_grad_clip=False
+        save_optim_every=10, grad_accum_split=1, quantile_grad_clip=False,
+        chunks_per_epoch=None, batch_size=None,
     ):
         self.model = model.to(device)
         self.device = device
@@ -111,6 +111,10 @@ class Trainer:
             self.clip_grad = ClipGrad()
         else:
             self.clip_grad = lambda parameters: torch.nn.utils.clip_grad_norm_(parameters, max_norm=2.0).item()
+
+        self.batch_size = batch_size
+        self.chunks_per_epoch = chunks_per_epoch
+        self.steps_per_epoch = chunks_per_epoch // batch_size
 
     def train_one_step(self, batch):
         self.optimizer.zero_grad()
@@ -135,20 +139,22 @@ class Trainer:
                     for k, v in losses_.items()
                 }
 
+        scale = self.scaler.get_scale()
         self.scaler.unscale_(self.optimizer)
         grad_norm = self.clip_grad(self.model.parameters())
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        return losses, grad_norm
+        return losses, grad_norm, scale
 
     def train_one_epoch(self, loss_log, lr_scheduler):
         t0 = perf_counter()
         chunks = 0
         self.model.train()
 
+        # total is in batches and desc represents the number of training chunks supplied
         progress_bar = tqdm(
-            total=len(self.train_loader), desc='[0/{}]'.format(len(self.train_loader.sampler)),
+            total=self.steps_per_epoch, desc='[0/{}]'.format(self.chunks_per_epoch),
             ascii=True, leave=True, ncols=100, bar_format='{l_bar}{bar}| [{elapsed}{postfix}]',
             **tqdm_environ()
         )
@@ -156,26 +162,25 @@ class Trainer:
 
         with progress_bar:
 
-            for batch in self.train_loader:
-
+            for batch in islice(self.train_loader, self.steps_per_epoch):
                 chunks += batch[0].shape[0]
-
-                losses, grad_norm = self.train_one_step(batch)
+                losses, grad_norm, scale = self.train_one_step(batch)
 
                 smoothed_loss = losses['loss'] if smoothed_loss is None else (0.01 * losses['loss'] + 0.99 * smoothed_loss)
 
                 progress_bar.set_postfix(loss='%.4f' % smoothed_loss)
-                progress_bar.set_description("[{}/{}]".format(chunks, len(self.train_loader.sampler)))
+                progress_bar.set_description("[{}/{}]".format(chunks, self.chunks_per_epoch))
                 progress_bar.update()
 
                 if loss_log is not None:
-                    lr = lr_scheduler.get_last_lr() if lr_scheduler is not None else [pg["lr"] for pg in optim.param_groups]
+                    lr = lr_scheduler.get_last_lr()
                     if len(lr) == 1: lr = lr[0]
                     loss_log.append({
                         'chunks': chunks,
                         'time': perf_counter() - t0,
                         'grad_norm': grad_norm,
                         'lr': lr,
+                        'scale': scale,
                         **losses
                     })
 
@@ -213,17 +218,19 @@ class Trainer:
         loss = np.mean([(x['loss'] if isinstance(x, dict) else x) for x in losses])
         return loss, np.mean(accs), np.median(accs)
 
-    def init_optimizer(self, lr, **kwargs):
-        if isinstance(lr, (list, tuple)):
-            if len(list(self.model.children())) != len(lr):
-                raise ValueError('Number of lrs does not match number of model children')
-            param_groups = [{'params': list(m.parameters()), 'lr': v} for (m, v) in zip(self.model.children(), lr)]
-            self.optimizer = torch.optim.AdamW(param_groups, lr=lr[0], **kwargs)
+    def init_optimizer(self, lr, **optim_kwargs):
+        if "package" in optim_kwargs:
+            optim_cls = load_object(optim_kwargs.pop('package'), optim_kwargs.pop('symbol'))
         else:
-            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, **kwargs)
+            optim_cls = torch.optim.AdamW
+
+        print(f"[loading optim] - '{optim_cls.__name__}' with args: {optim_kwargs}")
+        optim_kwargs["lr"] = lr
+        self.optimizer = optim_cls(self.model.parameters(), **optim_kwargs)
+
 
     def get_lr_scheduler(self, epochs, last_epoch=0):
-        return self.lr_scheduler_fn(self.optimizer, self.train_loader, epochs, last_epoch)
+        return self.lr_scheduler_fn(self.optimizer, self.steps_per_epoch, epochs, last_epoch)
 
     def fit(self, workdir, epochs=1, lr=2e-3, **optim_kwargs):
         if self.optimizer is None:
