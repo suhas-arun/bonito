@@ -553,7 +553,7 @@ class CTCWriter(Thread):
                 seq = ctc_data['sequence']
                 qstring = ctc_data['qstring']
                 mean_qscore = ctc_data.get('mean_qscore', mean_qscore_from_qstring(qstring))
-                mapping = ctc_data.get('mapping', False)
+                mapping = ctc_data.get('mapping', None)
 
                 self.log.append((read.read_id, len(read.signal)))
                 if reject_counter(mean_qscore < self.min_qscore, 'low_qscore'): continue
