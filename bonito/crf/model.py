@@ -190,7 +190,9 @@ class SeqdistModel(Module):
         )
         return cls(**kwargs)
 
-    def forward(self, x, *args):
+    def forward(self, x, hp_true_labels=None, *args):
+        if hp_true_labels is not None:
+            return self.encoder(x, hp_true_labels=hp_true_labels)
         return self.encoder(x)
 
     def decode_batch(self, x):
