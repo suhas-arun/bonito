@@ -93,7 +93,7 @@ class Trainer:
         self, model, device, train_loader, valid_loader, criterion=None,
         use_amp=True, lr_scheduler_fn=None, restore_optim=False,
         save_optim_every=10, grad_accum_split=1, quantile_grad_clip=False,
-        chunks_per_epoch=None, batch_size=None,
+        chunks_per_epoch=None, batch_size=None, pre_training=False
     ):
         self.model = model.to(device)
         self.device = device
@@ -115,6 +115,7 @@ class Trainer:
         self.batch_size = batch_size
         self.chunks_per_epoch = chunks_per_epoch
         self.steps_per_epoch = chunks_per_epoch // batch_size
+        self.pre_training = pre_training
 
     def train_one_step(self, batch):
         self.optimizer.zero_grad()
@@ -124,9 +125,20 @@ class Trainer:
             for batch_ in zip(
                 *map(lambda t: t.chunk(self.grad_accum_split, dim=0), batch)
             ):
-                data_, targets_, lengths_, *args = (x.to(self.device) for x in batch_)
+                if self.pre_training:
+                    data_, hp_lengths, is_hp, hp_bases = (x.to(self.device) for x in batch_)
+                    hp_labels = {
+                        'hp_lengths': hp_lengths,
+                        'is_hp': is_hp,
+                        'hp_bases': hp_bases
+                    }
 
-                scores_ = self.model(data_, *args)
+                    targets_, lengths_ = None, None
+                    scores_ = self.model(data_, hp_true_labels=hp_labels)
+                else:
+                    data_, targets_, lengths_, *args = (x.to(self.device) for x in batch_)
+                    scores_ = self.model(data_, *args)
+                
                 losses_ = self.criterion(scores_, targets_, lengths_)
 
                 if not isinstance(losses_, dict): losses_ = {'loss': losses_}
@@ -189,6 +201,10 @@ class Trainer:
         return smoothed_loss, perf_counter() - t0
 
     def validate_one_step(self, batch):
+        if self.pre_training:
+            # Pre-training does not have targets, so we skip the validation step
+            return [], [], [], {'loss': 0.0}
+
         data, targets, lengths, *args = batch
         with amp.autocast(enabled=self.use_amp):
             scores = self.model(data.to(self.device), *(x.to(self.device) for x in args))
