@@ -210,6 +210,8 @@ class Trainer:
             scores = self.model(data.to(self.device), *(x.to(self.device) for x in args))
             losses = self.criterion(scores, targets.to(self.device), lengths.to(self.device))
         losses = {k: v.item() for k, v in losses.items()} if isinstance(losses, dict) else losses.item()
+        if isinstance(scores, dict):
+                scores = scores['logits']
         if hasattr(self.model, 'decode_batch'):
             seqs = self.model.decode_batch(scores)
         else:
