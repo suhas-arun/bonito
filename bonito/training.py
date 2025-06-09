@@ -170,7 +170,7 @@ class Trainer:
             ascii=True, leave=True, ncols=100, bar_format='{l_bar}{bar}| [{elapsed}{postfix}]',
             **tqdm_environ()
         )
-        smoothed_loss = None
+        smoothed_losses = {}
 
         with progress_bar:
 
@@ -178,9 +178,23 @@ class Trainer:
                 chunks += batch[0].shape[0]
                 losses, grad_norm, scale = self.train_one_step(batch)
 
-                smoothed_loss = losses['loss'] if smoothed_loss is None else (0.01 * losses['loss'] + 0.99 * smoothed_loss)
+                for k, v in losses.items():
+                    if k not in smoothed_losses:
+                        smoothed_losses[k] = v
+                    else:
+                        smoothed_losses[k] = 0.01 * v + 0.99 * smoothed_losses[k]
 
-                progress_bar.set_postfix(loss='%.4f' % smoothed_loss)
+                if self.pre_training:
+                    postfix_dict = {
+                        k.rstrip("_loss"): f"{v:.4f}"
+                        for k, v in smoothed_losses.items()
+                        if k != "ctc_loss"
+                    } 
+                    progress_bar.set_postfix(**postfix_dict)
+                else:
+                    main_loss = smoothed_losses.get('loss', 0.0)
+                    progress_bar.set_postfix(loss='%.4f' % main_loss)
+
                 progress_bar.set_description("[{}/{}]".format(chunks, self.chunks_per_epoch))
                 progress_bar.update()
 
@@ -198,6 +212,7 @@ class Trainer:
 
                 if lr_scheduler is not None: lr_scheduler.step()
 
+        smoothed_loss = smoothed_losses.get('loss', 0.0)
         return smoothed_loss, perf_counter() - t0
 
     def validate_one_step(self, batch):
@@ -273,21 +288,31 @@ class Trainer:
                 if epoch % self.save_optim_every == 0:
                     torch.save(self.optimizer.state_dict(), os.path.join(workdir, "optim_%s.tar" % epoch))
 
-                val_loss, val_mean, val_median = self.validate_one_epoch()
+                if not self.pre_training:
+                    val_loss, val_mean, val_median = self.validate_one_epoch()
             except KeyboardInterrupt:
                 break
 
-            print("[epoch {}] directory={} loss={:.4f} mean_acc={:.3f}% median_acc={:.3f}%".format(
-                epoch, workdir, val_loss, val_mean, val_median
-            ))
+            if not self.pre_training:
+                print("[epoch {}] directory={} loss={:.4f} mean_acc={:.3f}% median_acc={:.3f}%".format(
+                    epoch, workdir, val_loss, val_mean, val_median
+                ))
 
             with bonito.io.CSVLogger(os.path.join(workdir, 'training.csv')) as training_log:
-                training_log.append({
-                    'time': datetime.today(),
-                    'duration': int(duration),
-                    'epoch': epoch,
-                    'train_loss': train_loss,
-                    'validation_loss': val_loss,
-                    'validation_mean': val_mean,
-                    'validation_median': val_median
-                })
+                if self.pre_training:
+                    training_log.append({
+                        'time': datetime.today(),
+                        'duration': int(duration),
+                        'epoch': epoch,
+                        'train_loss': train_loss
+                    })
+                else:
+                    training_log.append({
+                        'time': datetime.today(),
+                        'duration': int(duration),
+                        'epoch': epoch,
+                        'train_loss': train_loss,
+                        'validation_loss': val_loss,
+                        'validation_mean': val_mean,
+                        'validation_median': val_median
+                    })
