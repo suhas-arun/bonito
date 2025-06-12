@@ -216,15 +216,25 @@ class Trainer:
         return smoothed_loss, perf_counter() - t0
 
     def validate_one_step(self, batch):
-        if self.pre_training:
-            # Pre-training does not have targets, so we skip the validation step
-            return [], [], [], {'loss': 0.0}
-
-        data, targets, lengths, *args = batch
         with amp.autocast(enabled=self.use_amp):
-            scores = self.model(data.to(self.device), *(x.to(self.device) for x in args))
-            losses = self.criterion(scores, targets.to(self.device), lengths.to(self.device))
+            if self.pre_training:
+                data, hp_lengths, is_hp, hp_bases = (x.to(self.device) for x in batch)
+                hp_labels = {
+                    'hp_lengths': hp_lengths,
+                    'is_hp': is_hp,
+                    'hp_bases': hp_bases
+                }
+                scores = self.model(data, hp_true_labels=hp_labels)
+                losses = self.criterion(scores, None, None)
+            else:
+                data, targets, lengths, *args = batch
+                scores = self.model(data.to(self.device), *(x.to(self.device) for x in args))
+                losses = self.criterion(scores, targets.to(self.device), lengths.to(self.device))
+
         losses = {k: v.item() for k, v in losses.items()} if isinstance(losses, dict) else losses.item()
+        if self.pre_training:
+            return [], [], [], losses
+
         if isinstance(scores, dict):
                 scores = scores['logits']
         if hasattr(self.model, 'decode_batch'):
@@ -247,8 +257,10 @@ class Trainer:
         self.model.eval()
         with torch.no_grad():
             seqs, refs, accs, losses = zip(*(self.validate_one_step(batch) for batch in self.valid_loader))
-        seqs, refs, accs = (sum(x, []) for x in (seqs, refs, accs))
         loss = np.mean([(x['loss'] if isinstance(x, dict) else x) for x in losses])
+        if self.pre_training:
+            return loss, 0.0, 0.0
+        seqs, refs, accs = (sum(x, []) for x in (seqs, refs, accs))
         return loss, np.mean(accs), np.median(accs)
 
     def init_optimizer(self, lr, **optim_kwargs):
@@ -288,15 +300,13 @@ class Trainer:
                 if epoch % self.save_optim_every == 0:
                     torch.save(self.optimizer.state_dict(), os.path.join(workdir, "optim_%s.tar" % epoch))
 
-                if not self.pre_training:
-                    val_loss, val_mean, val_median = self.validate_one_epoch()
+                val_loss, val_mean, val_median = self.validate_one_epoch()
             except KeyboardInterrupt:
                 break
 
-            if not self.pre_training:
-                print("[epoch {}] directory={} loss={:.4f} mean_acc={:.3f}% median_acc={:.3f}%".format(
-                    epoch, workdir, val_loss, val_mean, val_median
-                ))
+            print("[epoch {}] directory={} loss={:.4f} mean_acc={:.3f}% median_acc={:.3f}%".format(
+                epoch, workdir, val_loss, val_mean, val_median
+            ))
 
             with bonito.io.CSVLogger(os.path.join(workdir, 'training.csv')) as training_log:
                 if self.pre_training:
